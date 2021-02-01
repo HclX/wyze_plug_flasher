@@ -65,9 +65,29 @@ char buffer[SPI_FLASH_SEC_SIZE] __attribute__((aligned(4))) = {0};
 static httpd_handle_t server = NULL;
 uint8_t mac[6];
 char macStr[18];
+char myIpStr[32];
 
 bool erased_bootloader = false;
 bool erased_factory_app = false;
+
+typedef struct {
+  char      tag[32];
+  char      ssid[32];
+  char      pass[64];
+  uint8_t   checksum;
+} SYS_CONFIG_t;
+
+#define SYS_CONFIG_MAGIC 0xDEADBEEF
+#define SYS_CONFIG_TAG "__SYS_CONFIG_TAG__"
+#define SYS_CONFIG_CHECKSUM 0x01
+
+volatile const
+SYS_CONFIG_t SYS_CONFIG = {
+  SYS_CONFIG_TAG,
+  "",
+  "",
+  SYS_CONFIG_CHECKSUM
+};
 
 static const char *TAG = "global";
 
@@ -106,58 +126,63 @@ esp_err_t _http_event_handler(esp_http_client_event_t *evt) {
   return ESP_OK;
 }
 
-static void wifi_event_handler(void *arg, esp_event_base_t event_base,
-                               int32_t event_id, void *event_data) {
-  static const char *TAG = "wifi_event";
+static void event_handler(void* arg, esp_event_base_t event_base,
+                                int32_t event_id, void* event_data)
+{
+  if (event_base == WIFI_EVENT) {
+    if (event_id == WIFI_EVENT_AP_STACONNECTED) {
+      wifi_event_ap_staconnected_t *event =
+          (wifi_event_ap_staconnected_t *)event_data;
+      ESP_LOGI(TAG, "station " MACSTR " join, AID=%d", MAC2STR(event->mac),
+              event->aid);
+    } else if (event_id == WIFI_EVENT_AP_STADISCONNECTED) {
+      wifi_event_ap_stadisconnected_t *event =
+          (wifi_event_ap_stadisconnected_t *)event_data;
+      ESP_LOGI(TAG, "station " MACSTR " leave, AID=%d", MAC2STR(event->mac),
+              event->aid);
+    } else if (event_id == WIFI_EVENT_STA_START) {
+      esp_wifi_connect();
+    } else if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        esp_wifi_connect();
+        ESP_LOGI(TAG, "retry to connect to the AP");
+    }
+  } else if (event_base == IP_EVENT) {
+      if (event_id == IP_EVENT_STA_GOT_IP) {
+        ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
+        strncpy(myIpStr, ip4addr_ntoa(&event->ip_info.ip), sizeof(myIpStr));
+        ESP_LOGI(TAG, "got ip:%s", myIpStr);
 
-  if (event_id == WIFI_EVENT_AP_STACONNECTED) {
-    wifi_event_ap_staconnected_t *event =
-        (wifi_event_ap_staconnected_t *)event_data;
-    ESP_LOGI(TAG, "station " MACSTR " join, AID=%d", MAC2STR(event->mac),
-             event->aid);
-  } else if (event_id == WIFI_EVENT_AP_STADISCONNECTED) {
-    wifi_event_ap_stadisconnected_t *event =
-        (wifi_event_ap_stadisconnected_t *)event_data;
-    ESP_LOGI(TAG, "station " MACSTR " leave, AID=%d", MAC2STR(event->mac),
-             event->aid);
+        if (server == NULL) {
+            ESP_LOGI(TAG, "Starting webserver");
+            server = start_webserver();
+        }
+    }
   }
 }
 
-void wifi_init_softap() {
-  static const char *TAG = "wifi_init";
+void wifi_init_sta(void)
+{
+    tcpip_adapter_init();
 
-  tcpip_adapter_init();
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
-  tcpip_adapter_dhcps_stop(TCPIP_ADAPTER_IF_AP);
-  tcpip_adapter_ip_info_t ip_info;
+    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &event_handler, NULL));
 
-  IP4_ADDR(&ip_info.ip, 10, 0, 0, 1);
-  IP4_ADDR(&ip_info.gw, 10, 0, 0, 1);
-  IP4_ADDR(&ip_info.netmask, 255, 255, 255, 0);
+    if (SYS_CONFIG.ssid[0] != '\0') {
+      wifi_config_t wifi_config = {0};
+      memcpy(wifi_config.sta.ssid, SYS_CONFIG.ssid, sizeof(wifi_config.sta.ssid));
+      memcpy(wifi_config.sta.password, SYS_CONFIG.pass, sizeof(wifi_config.sta.password));
 
-  tcpip_adapter_dhcp_status_t status;
-  tcpip_adapter_dhcpc_get_status(TCPIP_ADAPTER_IF_AP, &status);
-  tcpip_adapter_set_ip_info(TCPIP_ADAPTER_IF_AP, &ip_info);
-  tcpip_adapter_dhcps_start(TCPIP_ADAPTER_IF_AP);
+      ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA) );
+      ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config) );
+      ESP_ERROR_CHECK(esp_wifi_start() );
 
-  wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-  ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-
-  ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
-                                             &wifi_event_handler, NULL));
-
-  wifi_config_t wifi_config = {
-      .ap = {.ssid = WIFI_SSID,
-             .ssid_len = strlen(WIFI_SSID),
-             .max_connection = WIFI_MAX_CON,
-             .authmode = WIFI_AUTH_OPEN}
-  };
-
-  ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
-  ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_AP, &wifi_config));
-  ESP_ERROR_CHECK(esp_wifi_start());
-
-  ESP_LOGI(TAG, "wifi_init_softap finished. SSID:%s", WIFI_SSID);
+      ESP_LOGI(TAG, "wifi_init_sta finished.");
+    } else {
+      ESP_LOGE(TAG, "SSID not set");
+    }
 }
 
 /***
@@ -210,8 +235,6 @@ char build_ota_url(char *ipstr, char *ota_full) {
 
 esp_err_t handleRoot(httpd_req_t *req) {
   memset(buffer, 0, sizeof buffer);
-
-  char *ip = "10.0.0.1";
 
   char client_ipstr[40];
   req_get_client_ip(req, client_ipstr);
@@ -281,12 +304,12 @@ esp_err_t handleRoot(httpd_req_t *req) {
       buffer,
       "<h1><i><u>WYZE PLUG FLASHER</u></i></h1>\n"
       // BROKEN: Backup function not working. Hiding link.
-      //"Download Backup: <a href='http://%s/backup'>http://%s/backup</a>"
+      "Download Backup: <a href='backup'>http://%s/backup</a>"
       "<br><br>\n"
       "Flash Firmware: <a "
-      "href='http://%s/flash?url=%s'>http://%s/flash?url=%s</a>"
+      "href='flash?url=%s'>http://%s/flash?url=%s</a>"
       "<br><br>\n"
-      "Revert to Factory Firmware: <a href='http://%s/undo'>http://%s/undo</a>"
+      "Revert to Factory Firmware: <a href='undo'>http://%s/undo</a>"
       "<br><br>\n"
       "<hr>\n"
       "<b>Your IP: %s"
@@ -306,8 +329,10 @@ esp_err_t handleRoot(httpd_req_t *req) {
       "<br>\n"
       "<b>Bootloader:</b> %s"
       "<br>\n",
-      /* ip, ip, */
-      ip, full_ota_url, ip, full_ota_url, ip, ip, client_ipstr,
+      myIpStr,
+      full_ota_url, myIpStr, full_ota_url,
+      myIpStr,
+      client_ipstr,
       (char *)macStr, FlashSize, FlashMode, FlashSpeed, part_configured->label,
       part_configured->address, part_running->label, part_running->address,
       part_idle->label, part_idle->address,
@@ -460,16 +485,6 @@ httpd_handle_t start_webserver(void) {
   return NULL;
 }
 
-static void disconnect_handler(void *arg, esp_event_base_t event_base,
-                               int32_t event_id, void *event_data) {
-  httpd_handle_t *server = (httpd_handle_t *)arg;
-  if (*server) {
-    ESP_LOGI(TAG, "Stopping webserver");
-    stop_webserver(*server);
-    *server = NULL;
-  }
-}
-
 /***
  * CORE FUNCTIONS
  * */
@@ -607,25 +622,25 @@ static int do_flash(const char *url) {
    * Workaround outlined in README.
    * */
 
-  // ESP_LOGI(TAG, "BEGIN: Erasing RF calibration data.");
-  // uint32_t rf_cal_sector = user_rf_cal_sector_set();
+  ESP_LOGI(TAG, "BEGIN: Erasing RF calibration data.");
+  uint32_t rf_cal_sector = user_rf_cal_sector_set();
 
-  // if (!rf_cal_sector) {
-  //   /**
-  //    * If we've made it this far, we're functionally successful,
-  //    * so don't hard fail on error.
-  //    *
-  //    * If we can't clear RF cal data, Tasmota may experience constant
-  //    * WiFi disconnects. This can be fixed with Tasmota console
-  //    * command `Reset 3` followed by a hard power cycle
-  //    * (unplug, then plug back in).
-  //    * */
-  //   ESP_LOGE(TAG, "Failed to get RF calibration data.");
-  // } else {
-  //   ESP_LOGI(TAG, "RF calibration sector at 0x%06x.", rf_cal_sector);
-  //   ret = spi_flash_erase_sector(rf_cal_sector);
-  //   ESP_LOGI(TAG, "DONE: Erasing RF calibration data.");
-  // }
+  if (!rf_cal_sector) {
+    /**
+     * If we've made it this far, we're functionally successful,
+     * so don't hard fail on error.
+     *
+     * If we can't clear RF cal data, Tasmota may experience constant
+     * WiFi disconnects. This can be fixed with Tasmota console
+     * command `Reset 3` followed by a hard power cycle
+     * (unplug, then plug back in).
+     * */
+    ESP_LOGE(TAG, "Failed to get RF calibration data.");
+  } else {
+    ESP_LOGI(TAG, "RF calibration sector at 0x%06x.", rf_cal_sector);
+    ret = spi_flash_erase_sector(rf_cal_sector);
+    ESP_LOGI(TAG, "DONE: Erasing RF calibration data.");
+  }
 
   return SUCCESS;
 }
@@ -694,21 +709,8 @@ void app_main() {
 
   ESP_LOGI(TAG, "DONE: Retrieving system data.");
 
-  ESP_LOGI(TAG, "BEGIN: Start AP and web server.");
+  ESP_LOGI(TAG, "BEGIN: Start STATION mode");
+  wifi_init_sta();
 
-  ESP_LOGI(TAG, "Starting AP");
-  wifi_init_softap();
-
-  // Start Webserver
-  if (server == NULL) {
-    ESP_LOGI(TAG, "Starting webserver");
-    server = start_webserver();
-  }
-
-  ESP_ERROR_CHECK(esp_event_handler_register(
-      WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, &disconnect_handler, &server));
-
-  ESP_LOGI(TAG, "DONE: Start AP and web server.");
-
-  ESP_LOGI(TAG, "Initialization complete. Waiting for user command.");
+   ESP_LOGI(TAG, "Initialization complete. Waiting for user command.");
 }
