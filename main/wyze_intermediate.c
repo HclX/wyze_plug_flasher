@@ -47,8 +47,8 @@
 #define OTA_BUF_SIZE 250
 #define OTA_MAX_SIZE 0x40000
 
-static const char *default_ota_url_proto = "http";
-static const char *default_ota_url_port = "8080";
+static const char *default_ota_url_proto = "https";
+static const char *default_ota_url_port = "443";
 static const char *default_ota_url_filepath = "thirdparty.bin";
 
 const esp_partition_t *part_running;
@@ -74,6 +74,7 @@ typedef struct {
   char      tag[32];
   char      ssid[32];
   char      pass[64];
+  char      ota_url[127];
   uint8_t   checksum;
 } SYS_CONFIG_t;
 
@@ -84,6 +85,7 @@ typedef struct {
 volatile const
 SYS_CONFIG_t SYS_CONFIG = {
   SYS_CONFIG_TAG,
+  "",
   "",
   "",
   SYS_CONFIG_CHECKSUM
@@ -245,25 +247,25 @@ esp_err_t handleRoot(httpd_req_t *req) {
   // BROKEN: Flash size not displaying. Fix later.
   const char *FlashSize = "";
   switch (flash_data_addr[3] & 0xF0) {
-  case 0x0:
+  case 0x00:
     FlashSize = "512K";
     break;
-  case 0x1:
+  case 0x10:
     FlashSize = "256K";
     break;
-  case 0x2:
+  case 0x20:
     FlashSize = "1M";
     break;
-  case 0x3:
+  case 0x30:
     FlashSize = "2M";
     break;
-  case 0x4:
+  case 0x40:
     FlashSize = "4M";
     break;
-  case 0x8:
+  case 0x80:
     FlashSize = "8M";
     break;
-  case 0x9:
+  case 0x90:
     FlashSize = "16M";
     break;
   }
@@ -317,7 +319,7 @@ esp_err_t handleRoot(httpd_req_t *req) {
       "<hr>\n"
       "<b>MAC:</b> %s"
       "<br>\n"
-      "<b>FlashMode:</b> %s %s @ %sMHz"
+      "<b>FlashInfo:</b> %s, %s @ %sMHz"
       "<br>\n"
       "<b>Configured Boot Partition:</b> %s @ 0x%06x"
       "<br>\n"
@@ -330,11 +332,13 @@ esp_err_t handleRoot(httpd_req_t *req) {
       "<b>Bootloader:</b> %s"
       "<br>\n",
       myIpStr,
-      full_ota_url, myIpStr, full_ota_url,
+      SYS_CONFIG.ota_url, myIpStr, SYS_CONFIG.ota_url,
       myIpStr,
       client_ipstr,
-      (char *)macStr, FlashSize, FlashMode, FlashSpeed, part_configured->label,
-      part_configured->address, part_running->label, part_running->address,
+      (char *)macStr,
+      FlashSize, FlashMode, FlashSpeed,
+      part_configured->label, part_configured->address,
+      part_running->label, part_running->address,
       part_idle->label, part_idle->address,
       (erased_factory_app ? "Third party app" : "Factory app"),
       (erased_bootloader ? "Arduino eboot (third party)"
@@ -383,10 +387,8 @@ esp_err_t handleFlash(httpd_req_t *req) {
 
   char *buf;
   size_t buf_len;
-  char *user_url_buf = {0};
-
-  char client_ipstr[40];
-  req_get_client_ip(req, client_ipstr);
+  char user_url_buf[128] = {0};
+  const char *target_url = SYS_CONFIG.ota_url;
 
   buf_len = httpd_req_get_url_query_len(req) + 1;
   if (buf_len > 1) {
@@ -395,19 +397,15 @@ esp_err_t handleFlash(httpd_req_t *req) {
       ESP_LOGI(TAG, "Found URL query => %s", buf);
       // Get URL parameter
       if (httpd_query_key_value(buf, "url", user_url_buf,
-                                sizeof(*user_url_buf)) == ESP_OK) {
+                                sizeof(user_url_buf)) == ESP_OK) {
         ESP_LOGI(TAG, "Found URL query parameter => url=%s", user_url_buf);
+        target_url = user_url_buf;
       }
     }
     free(buf);
   }
 
-  char full_ota_url[150];
-  build_ota_url(client_ipstr, full_ota_url);
-  const char *target_url = user_url_buf ? user_url_buf : full_ota_url;
-
   ESP_LOGI(TAG, "Using URL: %s", target_url);
-
   esp_err_t ret = do_flash(target_url);
 
   if (!ret) {

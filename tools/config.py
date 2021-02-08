@@ -13,6 +13,10 @@ parser.add_argument(
     help="WIFI password")
 
 parser.add_argument(
+    '--ota_url', default='',
+    help="OTA URL")
+
+parser.add_argument(
     '--in', dest='in_file',
     help="Input firmware")
 
@@ -31,11 +35,11 @@ def xor_checksum(s):
 
 TAG = "__SYS_CONFIG_TAG__"
 
-config_template = TAG.ljust(0x80, '\x00').encode('ascii')
+config_template = TAG.ljust(0xFF, '\x00').encode('ascii')
 checksum = xor_checksum(config_template)
 print("checksum= %02X" % checksum)
 
-config_real = ''.join([x.ljust(y, '\x00') for x, y in zip([TAG, args.ssid, args.password], [32, 32, 64])]).encode('ascii')
+config_real = ''.join([x.ljust(y, '\x00') for x, y in zip([TAG, args.ssid, args.password, args.ota_url], [32, 32, 64, 127])]).encode('ascii')
 checksum = xor_checksum(config_real)
 config_real += bytes([checksum])
 print("checksum= %02X" % checksum)
