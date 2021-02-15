@@ -219,28 +219,27 @@ esp_err_t handleRoot(httpd_req_t *req) {
   char full_ota_url[150];
   build_ota_url(client_ipstr, full_ota_url);
 
-  // BROKEN: Flash size not displaying. Fix later.
-  const char *FlashSize = "";
+  const char *FlashSize = "Unknown";
   switch (flash_data_addr[3] & 0xF0) {
-  case 0x0:
+  case 0x00:
     FlashSize = "512K";
     break;
-  case 0x1:
+  case 0x10:
     FlashSize = "256K";
     break;
-  case 0x2:
+  case 0x20:
     FlashSize = "1M";
     break;
-  case 0x3:
+  case 0x30:
     FlashSize = "2M";
     break;
-  case 0x4:
+  case 0x40:
     FlashSize = "4M";
     break;
-  case 0x8:
+  case 0x80:
     FlashSize = "8M";
     break;
-  case 0x9:
+  case 0x90:
     FlashSize = "16M";
     break;
   }
