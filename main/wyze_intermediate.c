@@ -279,8 +279,7 @@ esp_err_t handleRoot(httpd_req_t *req) {
   sprintf(
       buffer,
       "<h1><i><u>WYZE PLUG FLASHER</u></i></h1>\n"
-      // BROKEN: Backup function not working. Hiding link.
-      //"Download Backup: <a href='http://%s/backup'>http://%s/backup</a>"
+      "Download Backup: <a href='http://%s/backup'>http://%s/backup</a>"
       "<br><br>\n"
       "Flash Firmware: <a "
       "href='http://%s/flash?url=%s'>http://%s/flash?url=%s</a>"
@@ -305,7 +304,7 @@ esp_err_t handleRoot(httpd_req_t *req) {
       "<br>\n"
       "<b>Bootloader:</b> %s"
       "<br>\n",
-      /* ip, ip, */
+      ip, ip,
       ip, full_ota_url, ip, full_ota_url, ip, ip, client_ipstr,
       (char *)macStr, FlashSize, FlashMode, FlashSpeed, part_configured->label,
       part_configured->address, part_running->label, part_running->address,
@@ -319,11 +318,6 @@ esp_err_t handleRoot(httpd_req_t *req) {
   return ESP_OK;
 }
 
-/**
- * BROKEN: handleBackup is not working. Returns .bin with MD5 mismatch. May be caused by
- * spi_flash_get_chip_size() not returning actual flash size. This function
- * retrieves flash size from image headers, not from SPI chip itself.
- * */
 esp_err_t handleBackup(httpd_req_t *req) {
   ESP_LOGI(TAG, "BEGIN: Sending backup.");
 
